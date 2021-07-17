@@ -21,7 +21,6 @@ from tensorflow.compat.v1 import InteractiveSession
 # deep sort imports
 from deep_sort import preprocessing, nn_matching
 from deep_sort.detection import Detection
-from deep_sort.tracker import Tracker
 from tools import generate_detections as gdet
 flags.DEFINE_string('framework', 'tf', '(tf, tflite, trt')
 flags.DEFINE_string('weights', './checkpoints/yolov4-416',
@@ -38,7 +37,26 @@ flags.DEFINE_boolean('dont_show', False, 'dont show video output')
 flags.DEFINE_boolean('info', False, 'show detailed info of tracked objects')
 flags.DEFINE_boolean('count', False, 'count objects being tracked on screen')
 
+def largest(arr,n):
+    if n == 0:
+        return 0
+    # Initialize maximum element
+    maximum = arr[0]
+    ind = 0
+  
+    # Traverse array elements from second
+    # and compare every element with 
+    # current max
+    for i in range(1, n):
+        if arr[i] > maximum:
+            maximum = arr[i]
+            ind = i
+    return ind
+
+
+
 def main(_argv):
+    print(cv2.__version__)
     # Definition of the parameters
     max_cosine_distance = 0.4
     nn_budget = None
@@ -50,7 +68,9 @@ def main(_argv):
     # calculate cosine distance metric
     metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
     # initialize tracker
-    tracker = Tracker(metric)
+
+    #My addition
+    tr = cv2.TrackerCSRT_create()
 
     # load configuration for object detector
     config = ConfigProto()
@@ -78,7 +98,7 @@ def main(_argv):
         vid = cv2.VideoCapture(int(video_path))
     except:
         vid = cv2.VideoCapture(video_path)
-
+    vid.set(cv2.CAP_PROP_FPS, 25)
     out = None
 
     # get video ready to save locally if flag is set
@@ -91,9 +111,12 @@ def main(_argv):
         out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
 
     frame_num = 0
+    tracking = False
+    initializ = False
     # while video is running
     while True:
-        return_value, frame = vid.read()
+        return_value, f = vid.read()
+        frame = f
         if return_value:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(frame)
@@ -137,6 +160,15 @@ def main(_argv):
             score_threshold=FLAGS.score
         )
 
+        width  = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))  # float `width`
+        height = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))  # float `height
+        width_threshold = width / 4
+        height_threshold = height / 10
+
+        if vid.isOpened(): 
+            cv2.rectangle(frame, (int(width_threshold), int(height_threshold)), (3 * int(width_threshold), 9 * int(height_threshold)), (255,0,0), 2, 1)
+
+
         # convert data to numpy arrays and slice out unused elements
         num_objects = valid_detections.numpy()[0]
         bboxes = boxes.numpy()[0]
@@ -160,7 +192,7 @@ def main(_argv):
         allowed_classes = list(class_names.values())
         
         # custom allowed classes (uncomment line below to customize tracker for only people)
-        #allowed_classes = ['person']
+        allowed_classes = ['Drone']
 
         # loop through objects and use class index to get class name, allow only classes in allowed_classes list
         names = []
@@ -188,49 +220,77 @@ def main(_argv):
         #initialize color map
         cmap = plt.get_cmap('tab20b')
         colors = [cmap(i)[:3] for i in np.linspace(0, 1, 20)]
-
+        outflag = False
         # run non-maxima supression
         boxs = np.array([d.tlwh for d in detections])
         scores = np.array([d.confidence for d in detections])
         classes = np.array([d.class_name for d in detections])
         indices = preprocessing.non_max_suppression(boxs, classes, nms_max_overlap, scores)
-        detections = [detections[i] for i in indices]       
-
-        # Call the tracker
-        tracker.predict()
-        tracker.update(detections)
-
-        # update tracks
-        for track in tracker.tracks:
-            if not track.is_confirmed() or track.time_since_update > 1:
-                continue 
-            bbox = track.to_tlbr()
-            class_name = track.get_class()
+        detections = [detections[i] for i in indices]
+        boxes = [d.tlwh for d in detections]
+        for b in boxes:
+            p1 = (int(b[0]), int(b[1]))
+            p2 = (int(b[0] + b[2]), int(b[1] + b[3]))
+            cv2.rectangle(frame, p1, p2, (0,255,0), 2, 1)
+        scoretable = [d.confidence for d in detections]
+        index = largest(scoretable, len(scoretable))
+        if len(detections) > 0 and detections[index].confidence > 0.7:
+            mainbox = detections[index].tlwh
+            if mainbox[0] > width_threshold and mainbox[0] < 3*width_threshold and mainbox[1] > height_threshold and mainbox[1] < 9*height_threshold and mainbox[0] + mainbox[2] > width_threshold and mainbox[0] + mainbox[2] < 3*width_threshold and mainbox[1] + mainbox[3] > height_threshold and mainbox[1] + mainbox[3] < 9*height_threshold:
+                listbox = (int(mainbox[0]), int(mainbox[1]), int(mainbox[2]), int(mainbox[3]))
+                #initializes the csrt object tracker
+                tracking = tr.init(frame, listbox)
+                tracking = True
+                timepass = 0.0
+                #holds the program in this loop while object tracker works, to not use yolo and object tracker at the same time
+                while tracking:
+                    tracking, frame = vid.read()
+                    start_time = time.time()
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    if vid.isOpened(): 
+                        cv2.rectangle(frame, (int(width_threshold), int(height_threshold)), (3 * int(width_threshold), 9 * int(height_threshold)), (255,0,0), 2, 1)
+                    if not tracking:
+                        break
+                    tracking, listbox = tr.update(frame)
+                    if tracking and listbox[0] > width_threshold and listbox[0] < 3*width_threshold and listbox[1] > height_threshold and listbox[1] < 9*height_threshold and listbox[0] + listbox[2] > width_threshold and listbox[0] + listbox[2] < 3*width_threshold and listbox[1] + listbox[3] > height_threshold and listbox[1] + listbox[3] < 9*height_threshold:
+                        p1 = (int(listbox[0]), int(listbox[1]))
+                        p2 = (int(listbox[0] + listbox[2]), int(listbox[1] + listbox[3]))
+                        cv2.rectangle(frame, p1, p2, (0,0,255), 2, 1)
+                    else:
+                        tracking = False
+                        outflag = True
+                    timepass += time.time() - start_time 
+                    fps = 1.0 / (time.time() - start_time)
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    cv2.putText(frame, "LOCKED",(int(width/2),45), font, 2, (255, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(frame, "{:.2f}".format(timepass) + " second",(int(width_threshold),45), font, 1, (255, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(frame, "FPS: " + str(fps),(0,height), font, 1, (255, 0, 0), 2, cv2.LINE_AA)
+                    result = np.asarray(frame)
+                    result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    
+                    if not FLAGS.dont_show:
+                        cv2.imshow("Output Video", result)
+                    
+                    # if output flag is set, save video file
+                    if FLAGS.output:
+                        out.write(result)
+                    if cv2.waitKey(1) & 0xFF == ord('q'): break
+        
+        if not outflag:
+            fps = 1.0 / (time.time() - start_time)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(frame, "FPS: " + str(fps),(0,height), font, 1, (255, 0, 0), 2, cv2.LINE_AA)
+            result = np.asarray(frame)
+            result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             
-        # draw bbox on screen
-            color = colors[int(track.track_id) % len(colors)]
-            color = [i * 255 for i in color]
-            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), color, 2)
-            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]-30)), (int(bbox[0])+(len(class_name)+len(str(track.track_id)))*17, int(bbox[1])), color, -1)
-            cv2.putText(frame, class_name + "-" + str(track.track_id),(int(bbox[0]), int(bbox[1]-10)),0, 0.75, (255,255,255),2)
-
-        # if enable info flag then print details about each track
-            if FLAGS.info:
-                print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
-
-        # calculate frames per second of running detections
-        fps = 1.0 / (time.time() - start_time)
-        print("FPS: %.2f" % fps)
-        result = np.asarray(frame)
-        result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            if not FLAGS.dont_show:
+                cv2.imshow("Output Video", result)
+            
+            # if output flag is set, save video file
+            if FLAGS.output:
+                out.write(result)
+            if cv2.waitKey(1) & 0xFF == ord('q'): break
         
-        if not FLAGS.dont_show:
-            cv2.imshow("Output Video", result)
-        
-        # if output flag is set, save video file
-        if FLAGS.output:
-            out.write(result)
-        if cv2.waitKey(1) & 0xFF == ord('q'): break
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
