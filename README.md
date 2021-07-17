@@ -11,7 +11,7 @@ Main purpose of this project is locking an UAV with a camera and counting the ti
 
 You can run it using the steps below:
 
-# yolov4-deepsort
+# yolov4-CSRT
 [![license](https://img.shields.io/github/license/mashape/apistatus.svg)](LICENSE)
 
 Object tracking implemented with YOLOv4, CSRT, and TensorFlow. YOLOv4 is a state of the art algorithm that uses deep convolutional neural networks to perform object detections.
